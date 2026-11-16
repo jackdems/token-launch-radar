@@ -3,4 +3,7 @@ token-radar-01-kit/
 kit.tar.gz
 _brief/
 out/
+out1/
+out2/
+probe_model.ts
 *.log
