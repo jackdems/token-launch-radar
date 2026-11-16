@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Launch Radar — pre-token protocols ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1>Token Launch Radar</h1>
+        <p class="tagline">Protocols with no token yet, ranked by what their token could be worth.</p>
+      </div>
+    </div>
+    <dl class="headline" id="headline"></dl>
+  </div>
+</header>
+
+<section class="method" id="method">
+  <div class="method-inner">
+    <div class="method-copy">
+      <h2>How the number is made</h2>
+      <p id="method-lead"></p>
+      <p class="method-note" id="method-fit"></p>
+    </div>
+    <div class="method-curve">
+      <div class="curve-head">Implied multiple by TVL</div>
+      <svg id="curve" viewBox="0 0 320 150" role="img" aria-label="Fitted multiple against protocol TVL"></svg>
+      <p class="curve-note" id="curve-note"></p>
+    </div>
+  </div>
+</section>
+
+<nav class="controls" id="controls">
+  <div class="control-group">
+    <label for="q">Find a protocol</label>
+    <input id="q" type="search" placeholder="name, slug or category…" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="control-group">
+    <label for="category">Category</label>
+    <select id="category"><option value="">All categories</option></select>
+  </div>
+  <div class="control-group">
+    <label for="scope">Scope</label>
+    <select id="scope">
+      <option value="">Every ranked protocol</option>
+      <option value="watchlist">Watchlist only</option>
+      <option value="early">Early radar only</option>
+    </select>
+  </div>
+  <div class="control-group">
+    <label for="sort">Sort by</label>
+    <select id="sort">
+      <option value="rank">Implied value</option>
+      <option value="tvl">TVL</option>
+      <option value="growth">7-day growth</option>
+      <option value="age">Age</option>
+      <option value="multiple">Fitted multiple</option>
+    </select>
+  </div>
+  <div class="control-group">
+    <label for="dir">Order</label>
+    <select id="dir"><option value="desc">High to low</option><option value="asc">Low to high</option></select>
+  </div>
+  <button id="reset" class="ghost" type="button">Reset</button>
+</nav>
+
+<main>
+  <div class="result-count" id="count"></div>
+  <table class="board" id="board">
+    <thead>
+      <tr>
+        <th class="c-rank">#</th>
+        <th class="c-name">Protocol</th>
+        <th class="c-cat">Category</th>
+        <th class="c-num">Implied value</th>
+        <th class="c-num">TVL</th>
+        <th class="c-num">7d</th>
+        <th class="c-num">Age</th>
+        <th class="c-bar">Value per $1 of TVL</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="empty" id="empty" hidden>No protocol matches those filters.</p>
+</main>
+
+<aside class="detail" id="detail" hidden>
+  <button class="close" id="close" type="button" aria-label="Close detail">×</button>
+  <div id="detail-body"></div>
+</aside>
+
+<footer class="colophon">
+  <p id="colophon"></p>
+</footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
