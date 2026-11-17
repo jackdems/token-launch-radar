@@ -26,7 +26,7 @@ import {
   type Snapshot,
   type SnapshotProtocol,
 } from './lib/model.ts';
-import { farmSteps } from './lib/farm.ts';
+import { AIRDROP_SUPPLY_SHARE, ASSUMED_QUALIFYING_WALLETS, LAUNCH_PROBABILITY, farmEconomics, farmSteps } from './lib/farm.ts';
 import { buildDossier } from './lib/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -89,7 +89,7 @@ const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 const calibration = fitCalibration(snapshot);
 const tvlRef = tvlReference(snapshot, calibration);
 
-/** Every protocol the board ranks: the whole watchlist, then the early radar below the floor. */
+/** Every protocol the board ranks: the whole watchlist, then every other pre-token protocol. */
 function buildBoard(): BoardRow[] {
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
@@ -98,8 +98,10 @@ function buildBoard(): BoardRow[] {
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
+  // The early radar: every other rankable pre-token protocol, the strongest by TVL first. The
+  // watchlist is the floor, never the ceiling, so this is where the board earns its width.
   const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
+    .filter((p) => !chosen.has(p.slug) && isRankable(p))
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
     .slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
@@ -125,7 +127,21 @@ function buildBoard(): BoardRow[] {
       growth_multiplier: Math.round(row.s.growth_multiplier * 1e4) / 1e4,
       category_tilt: Math.round(row.s.category_tilt * 1e4) / 1e4,
     };
-    return { ...base, farm_steps: farmSteps(row.p, base) };
+    // The economics are computed once and reused: the steps quote the same verdict the row carries.
+    const econ = farmEconomics(row.p, base);
+    return {
+      ...base,
+      farm: {
+        value_per_tvl: econ.value_per_tvl,
+        capital_usd: econ.capital_usd,
+        cost_usd: econ.cost_usd,
+        expected_value_usd: econ.expected_value_usd,
+        edge: econ.edge,
+        verdict: econ.verdict,
+        reason: econ.reason,
+      },
+      farm_steps: farmSteps(row.p, base),
+    };
   });
 }
 
@@ -182,7 +198,11 @@ const radar: RadarData = {
   as_of: snapshot.as_of,
   source: snapshot.source,
   floor_usd: snapshot.floor_usd,
-  tvl_ref: tvlRef,
+  farm_model: {
+    airdrop_share: AIRDROP_SUPPLY_SHARE,
+    assumed_wallets: ASSUMED_QUALIFYING_WALLETS,
+    launch_probability: LAUNCH_PROBABILITY,
+  },
   calibration,
   model_version: MODEL_VERSION,
   board_size: board.length,

@@ -18,7 +18,7 @@
 
   var MAX_VALUE = D.rows.reduce(function (m, r) { return Math.max(m, r.implied_value_usd); }, 1);
   // The reference TVL the curve pivots on comes from the calibration, never a number typed here.
-  var REF_TVL = D.tvl_ref;
+  var REF_TVL = D.calibration.tvl_ref;
   // The per-TVL-dollar bar is scaled against the board's own extremes, so its length is information.
   var MIN_PER_DOLLAR = Infinity;
   var MAX_PER_DOLLAR = 0;
@@ -72,10 +72,13 @@
     var top = D.rows[0];
     var items = [
       ['Protocols ranked', String(D.board_size)],
-      ['Watchlist', D.watchlist_size + '/' + D.watchlist_size],
+      // The model's error is a headline number, not a footnote: a reader who only sees the KPI
+      // strip must still learn how wrong a single row can be.
+      ['Median error', Math.round(cal.oos.median_abs_pct_error * 100) + '%'],
+      ['Out-of-sample R²', cal.oos.r2.toFixed(3)],
       ['Top implied value', top ? usd(top.implied_value_usd) : '—'],
       ['Live comps', String(cal.live_count)],
-      ['Fit R²', cal.cv_r2.toFixed(3)]
+      ['CV R²', cal.cv_r2.toFixed(3)]
     ];
     var dl = document.getElementById('headline');
     dl.innerHTML = items.map(function (it) {
@@ -97,16 +100,36 @@
       expText + '</sup></code>, then tilted by a category prior shrunk towards the global multiple.';
 
     document.getElementById('method-fit').innerHTML =
-      'Fit quality, stated rather than hidden: 5-fold cross-validated R² <strong>' + cal.cv_r2.toFixed(3) +
-      '</strong>, median error <strong>' + Math.round(cal.median_abs_pct_error * 100) + '%</strong>, against a ' +
-      'random-feature control at R² ' + cal.control_r2.toFixed(3) + '. The signal is real but small — most of ' +
-      'the spread in market cap per dollar of TVL is not explained by this snapshot. Treat each number as a ' +
-      'ranking, not a price target.';
+      'Fit quality, stated rather than hidden. <strong>Out-of-sample test</strong> (train on protocols listed before ' +
+      cal.oos.cutoff + ', predict the ' + cal.oos.test + ' listed after): R² <strong>' + cal.oos.r2.toFixed(3) +
+      '</strong>, median error ' + Math.round(cal.oos.median_abs_pct_error * 100) + '%. ' +
+      'Five-fold cross-validation gives R² ' + cal.cv_r2.toFixed(3) + ', against a random-feature control at ' +
+      cal.control_r2.toFixed(3) + '. Most of the spread in market cap per dollar of TVL is not explained by this ' +
+      'snapshot, so treat each number as a ranking, not a price target.';
+
+    // The farm model's own assumptions, printed because a reader is entitled to argue with them.
+    var farmEl = document.getElementById('method-farm');
+    if (farmEl) {
+      farmEl.innerHTML =
+        'Farm verdicts net one wallet\'s share of a launch airdrop against what the position costs: an assumed ' +
+        '<strong>' + (D.farm_model.airdrop_share * 100).toFixed(0) + '% of supply</strong> split across ' +
+        D.farm_model.assumed_wallets.toLocaleString('en-US') + ' qualifying wallets, weighted by a ' +
+        (D.farm_model.launch_probability * 100).toFixed(0) + '% chance the token launches at all. ' +
+        'Change any of those three numbers and the verdict moves; they are assumptions, not measurements.';
+    }
 
     // The curve, drawn from the calibration itself so the picture cannot drift from the code.
+    // Both the line and the points use the same axes, and the axes cover the data: a chart whose
+    // domain stops short of the table's TVL range proves nothing about the rows below it.
     var svg = document.getElementById('curve');
-    var w = 320, h = 150, padL = 46, padR = 12, padT = 14, padB = 26;
-    var tvlMin = Math.log(2e6), tvlMax = Math.log(1e11);
+    var w = 460, h = 190, padL = 52, padR = 14, padT = 16, padB = 30;
+    // The domain must cover every point drawn AND every row in the table below it: a chart whose
+    // axis stops short of the table's TVL range proves nothing about those rows.
+    var tvlAll = D.rows.map(function (r) { return r.tvl_usd; })
+      .concat(D.live.map(function (l) { return l.tvl_usd; }))
+      .concat([REF_TVL]);
+    var tvlMin = Math.log(Math.min.apply(null, tvlAll) * 0.85);
+    var tvlMax = Math.log(Math.max.apply(null, tvlAll) * 1.15);
     var rMin = 0.005, rMax = 1.2;
     function x(tvl) {
       return padL + ((Math.log(tvl) - tvlMin) / (tvlMax - tvlMin)) * (w - padL - padR);
@@ -121,28 +144,37 @@
       var r = cal.base_multiple * Math.pow(tvl / REF_TVL, cal.elasticity);
       path.push((i === 0 ? 'M' : 'L') + x(tvl).toFixed(1) + ' ' + y(r).toFixed(1));
     }
+
+    // The live comps, plotted: these are the 128 observations the fit was drawn from, so a reader
+    // can see the spread the R-squared describes instead of being told about it.
+    var pts = D.live.map(function (l) {
+      return '<circle cx="' + x(l.tvl_usd).toFixed(1) + '" cy="' + y(l.multiple).toFixed(1) +
+        '" r="1.9" fill="#4fd1c5" fill-opacity="0.5"/>';
+    }).join('');
+
     var grid = '';
     [0.01, 0.1, 1].forEach(function (v) {
       grid += '<line x1="' + padL + '" y1="' + y(v).toFixed(1) + '" x2="' + (w - padR) + '" y2="' + y(v).toFixed(1) +
         '" stroke="#2b3242" stroke-width="1"/>' +
         '<text x="' + (padL - 7) + '" y="' + (y(v) + 4).toFixed(1) + '" fill="#9aa3b6" font-size="11" text-anchor="end" font-family="monospace">' + v + '×</text>';
     });
-    // Vertical guides so a reader can place a protocol on the curve.
-    [1e7, 1e9, 1e11].forEach(function (v) {
+    [1e8, 1e9, 1e10].forEach(function (v) {
+      if (Math.log(v) < tvlMin || Math.log(v) > tvlMax) return;
+      var label = v >= 1e9 ? '$' + (v / 1e9).toFixed(0) + 'B' : '$' + (v / 1e6).toFixed(0) + 'M';
       grid += '<line x1="' + x(v).toFixed(1) + '" y1="' + padT + '" x2="' + x(v).toFixed(1) + '" y2="' + (h - padB) +
-        '" stroke="#1e2431" stroke-width="1"/>';
+        '" stroke="#1e2431" stroke-width="1"/>' +
+        '<text x="' + x(v).toFixed(1) + '" y="' + (h - padB + 14) + '" fill="#9aa3b6" font-size="10" text-anchor="middle" font-family="monospace">' + label + '</text>';
     });
-    // The reference point: where the multiple equals base_multiple.
     grid += '<circle cx="' + x(REF_TVL).toFixed(1) + '" cy="' + y(cal.base_multiple).toFixed(1) + '" r="3" fill="#f5b544"/>';
-    svg.innerHTML = grid +
+
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    svg.innerHTML = grid + pts +
       '<path d="' + path.join(' ') + '" fill="none" stroke="#f5b544" stroke-width="2"/>' +
-      '<text x="' + padL + '" y="' + (h - 8) + '" fill="#9aa3b6" font-size="11" font-family="monospace">$2M</text>' +
-      '<text x="' + (w - padR) + '" y="' + (h - 8) + '" fill="#9aa3b6" font-size="11" text-anchor="end" font-family="monospace">$100B</text>' +
-      '<text x="' + (x(REF_TVL) + 6).toFixed(1) + '" y="' + (y(cal.base_multiple) - 6).toFixed(1) + '" fill="#f5b544" font-size="10" font-family="monospace">' + cal.base_multiple.toFixed(3) + '×</text>';
+      '<text x="' + (x(REF_TVL) + 7).toFixed(1) + '" y="' + (y(cal.base_multiple) - 7).toFixed(1) + '" fill="#f5b544" font-size="10" font-family="monospace">' + cal.base_multiple.toFixed(3) + '× fit</text>';
 
     document.getElementById('curve-note').textContent =
-      'TVL on a log scale, multiple on a log scale. Bigger protocols trade at lower multiples (elasticity ' +
-      cal.elasticity.toFixed(3) + '), so implied value grows more slowly than TVL does.';
+      'Each dot is one of the ' + D.live_size + ' protocols that already trade; the line is the fitted curve. ' +
+      'That spread is what the R² describes: the fit gets the level roughly right and misses individual protocols by a lot.';
   }
 
   /* ---------- filters ---------- */
@@ -195,8 +227,13 @@
     var tbody = document.getElementById('rows');
     var html = rows.map(function (r) {
       var perDollar = r.implied_value_usd / r.tvl_usd;
-      var span = MAX_PER_DOLLAR - MIN_PER_DOLLAR;
-      var barW = span > 0 ? 6 + ((perDollar - MIN_PER_DOLLAR) / span) * 94 : 50;
+      // The bar is scaled on a LOG axis between the board's own extremes. On a linear axis every
+      // row looks the same length (the values span 0.03-0.74, so the top ones flatten the rest);
+      // a log scale makes the 2x gaps visible, which is the only reason to draw a bar at all.
+      var span = Math.log(MAX_PER_DOLLAR) - Math.log(MIN_PER_DOLLAR);
+      var barW = span > 0
+        ? 6 + ((Math.log(perDollar) - Math.log(MIN_PER_DOLLAR)) / span) * 94
+        : 50;
       return '<tr data-slug="' + r.slug + '">' +
         '<td class="c-rank">' + r.rank + '</td>' +
         '<td class="c-name"><span class="nm">' + esc(r.name) + '</span><span class="sl">' + r.slug +
@@ -206,8 +243,10 @@
         '<td class="c-num mut">' + usd(r.tvl_usd) + '</td>' +
         '<td class="c-num ' + growthClass(r.change_7d) + '">' + growthArrow(r.change_7d) + pct(r.change_7d) + '</td>' +
         '<td class="c-num mut">' + age(r.age_days) + '</td>' +
+        '<td class="c-verdict"><span class="v v-' + r.farm.verdict + '" title="' + esc(r.farm.reason) + '">' + r.farm.verdict + '</span>' +
+          '<span class="v-edge" title="expected value / cost of the position">edge ' + r.farm.edge.toFixed(1) + 'x</span></td>' +
         '<td class="c-bar"><span class="bar-track"><span class="bar-fill" style="width:' + barW.toFixed(1) + '%"></span></span>' +
-          '<span class="bar-label">' + perDollar.toFixed(3) + '$ per $1 TVL</span></td>' +
+          '<span class="bar-label">$' + perDollar.toFixed(3) + '</span></td>' +
         '</tr>';
     }).join('');
     tbody.innerHTML = html;

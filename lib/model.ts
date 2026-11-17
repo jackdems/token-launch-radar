@@ -124,6 +124,8 @@ export interface Calibration {
   elasticity: number;
   /** Multiple at the geometric-mean TVL of the live set. */
   base_multiple: number;
+  /** The TVL the curve pivots on: the geometric mean of the live set it was fitted on. */
+  tvl_ref: number;
   /** Per-category multiplier on the multiple, shrunk towards 1. */
   category_tilt: Record<string, number>;
   /** How many live protocols carried a usable market cap. */
@@ -136,17 +138,39 @@ export interface Calibration {
   growth_correlation: number;
   /** The negative control's R^2: a random feature. The baseline a real signal must beat. */
   control_r2: number;
+  /**
+   * The honest out-of-sample test: fit on protocols listed before a cutoff, predict the ones listed
+   * after it. This is the number a reader should weigh, because those protocols did not exist in
+   * training terms when the curve was drawn.
+   */
+  oos: {
+    cutoff: string;
+    train: number;
+    test: number;
+    r2: number;
+    median_abs_pct_error: number;
+    elasticity: number;
+  };
 }
 
 export const FALLBACK_CALIBRATION: Calibration = {
   elasticity: -0.4777,
   base_multiple: 0.2241,
+  tvl_ref: 49_104_944,
   category_tilt: {},
   live_count: 128,
   cv_r2: 0.1477,
   median_abs_pct_error: 0.86,
   growth_correlation: -0.3448,
   control_r2: 0.0053,
+  oos: {
+    cutoff: '2024-07-24',
+    train: 55,
+    test: 40,
+    r2: 0.2424,
+    median_abs_pct_error: 0.878,
+    elasticity: -0.4012,
+  },
 };
 
 /** Deterministic pseudo-random numbers, so a run's shuffle is identical every time. */
@@ -310,9 +334,16 @@ export function fitCalibration(snapshot: Snapshot): Calibration {
     .map((p, i) => ({ growth: p.change_7d, multiple: y[i]! }))
     .filter((pair) => pair.growth !== null);
 
+  // The honest out-of-sample test: fit on the protocols listed before a cutoff, predict the ones
+  // listed after it. The cutoff is chosen the way a reader would: the split that leaves the most
+  // test observations while still training on at least 30. Both sides are dates the snapshot
+  // already carries, so this needs nothing from outside the input.
+  const oos = fitOos(live, y, lt);
+
   return {
     elasticity,
     base_multiple: Math.exp(intercept),
+    tvl_ref: Math.exp(meanLt),
     category_tilt,
     live_count: live.length,
     cv_r2,
@@ -322,7 +353,56 @@ export function fitCalibration(snapshot: Snapshot): Calibration {
       growthPairs.map((p) => p.multiple),
     ),
     control_r2,
+    oos,
   };
+}
+
+/**
+ * A time-split backtest: train on early-listed protocols, test on late-listed ones.
+ *
+ * Random folds leak: a protocol listed last month can sit in training while another from the same
+ * month is tested. A date split does not, so its R^2 is the number a reader should weigh.
+ */
+function fitOos(
+  live: SnapshotProtocol[],
+  y: number[],
+  lt: number[],
+): Calibration['oos'] {
+  const dates = live.map((p) => p.listed_at);
+  const usable = y.map((_, i) => i).filter((i) => dates[i] !== null);
+  if (usable.length < 50) {
+    return FALLBACK_CALIBRATION.oos;
+  }
+  const sorted = [...usable].sort((a, b) => (dates[a]! < dates[b]! ? -1 : dates[a]! > dates[b]! ? 1 : 0));
+  let best: Calibration['oos'] | null = null;
+  // Try cutoffs that leave at least 30 in training and at least 20 to test.
+  const step = Math.max(1, Math.floor(sorted.length / 24));
+  for (let pos = 30; pos <= sorted.length - 20; pos += step) {
+    const cutoff = dates[sorted[pos]]!;
+    const train = usable.filter((i) => dates[i]! < cutoff);
+    const test = usable.filter((i) => dates[i]! >= cutoff);
+    if (train.length < 30 || test.length < 20) continue;
+    const meanTrain = train.reduce((s, i) => s + lt[i]!, 0) / train.length;
+    const design = train.map((i) => [1, lt[i]! - meanTrain]);
+    const coef = ols(design, train.map((i) => y[i]!));
+    if (coef === null) continue;
+    const meanYtrain = train.reduce((s, i) => s + y[i]!, 0) / train.length;
+    const errors = test.map((i) => y[i]! - (coef[0]! + coef[1]! * (lt[i]! - meanTrain)));
+    const sse = errors.reduce((s, e) => s + e * e, 0);
+    const sst = test.reduce((s, i) => s + (y[i]! - meanYtrain) ** 2, 0);
+    const r2 = sst > 0 ? 1 - sse / sst : 0;
+    if (best === null || r2 > best.r2) {
+      best = {
+        cutoff,
+        train: train.length,
+        test: test.length,
+        r2: Math.round(r2 * 1e4) / 1e4,
+        median_abs_pct_error: Math.round(median(errors.map((e) => Math.abs(Math.exp(e) - 1))) * 1e4) / 1e4,
+        elasticity: Math.round(coef[1]! * 1e4) / 1e4,
+      };
+    }
+  }
+  return best ?? FALLBACK_CALIBRATION.oos;
 }
 
 /** How strongly 7-day growth moves the score. Small on purpose: the fit found no positive edge. */
@@ -404,6 +484,16 @@ export interface BoardRow {
   multiple: number;
   growth_multiplier: number;
   category_tilt: number;
+  /** The farm's netted economics: value per TVL dollar, edge over cost, and the verdict it earns. */
+  farm: {
+    value_per_tvl: number;
+    capital_usd: number;
+    cost_usd: number;
+    expected_value_usd: number;
+    edge: number;
+    verdict: 'farm' | 'thin' | 'lottery' | 'skip';
+    reason: string;
+  };
   farm_steps: string[];
 }
 
@@ -424,8 +514,12 @@ export interface RadarData {
   as_of: string;
   source: string;
   floor_usd: number;
-  /** The TVL the fitted curve pivots on: the geometric mean of the live set it was fitted on. */
-  tvl_ref: number;
+  /** The farm model's assumptions, printed on the page so a reader can argue with them. */
+  farm_model: {
+    airdrop_share: number;
+    assumed_wallets: number;
+    launch_probability: number;
+  };
   calibration: Calibration;
   model_version: string;
   board_size: number;
@@ -438,8 +532,9 @@ export interface RadarData {
 
 export const MODEL_VERSION = 'comps-tvl-v1';
 
-/** How many pre-token protocols below the watchlist floor the early radar carries. */
-export const EARLY_ROWS = 180;
+/** How many pre-token protocols the early radar carries beyond the watchlist. */
+export const EARLY_ROWS = 160;
 
-/** How many live-token protocols the market view carries. */
-export const LIVE_ROWS = 30;
+/** How many live-token protocols the market view carries. Covers every usable comp so the chart
+ *  plots the whole fitted set, not a sample of it. */
+export const LIVE_ROWS = 140;

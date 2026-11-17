@@ -26,6 +26,7 @@
       <h2>How the number is made</h2>
       <p id="method-lead"></p>
       <p class="method-note" id="method-fit"></p>
+      <p class="method-note" id="method-farm"></p>
     </div>
     <div class="method-curve">
       <div class="curve-head">Implied multiple by TVL</div>
@@ -71,6 +72,14 @@
 
 <main>
   <div class="result-count" id="count"></div>
+  <div class="legend" id="legend">
+    <span class="legend-label">Farm verdict</span>
+    <span class="v v-farm">farm</span><span class="legend-note">3x and up — worth the capital</span>
+    <span class="v v-thin">thin</span><span class="legend-note">1x to under 3x — only if already active</span>
+    <span class="v v-lottery">lottery</span><span class="legend-note">0.3x to under 1x — a ticket, not yield</span>
+    <span class="v v-skip">skip</span><span class="legend-note">under 0.3x — gas eats it</span>
+    <span class="legend-note legend-edge">edge = expected airdrop share ÷ (capital + gas)</span>
+  </div>
   <table class="board" id="board">
     <thead>
       <tr>
@@ -81,6 +90,7 @@
         <th class="c-num">TVL</th>
         <th class="c-num">7d</th>
         <th class="c-num">Age</th>
+        <th class="c-verdict">Verdict</th>
         <th class="c-bar">Value per $1 of TVL</th>
       </tr>
     </thead>
